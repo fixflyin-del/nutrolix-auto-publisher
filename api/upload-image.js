@@ -1,5 +1,13 @@
 import { put } from '@vercel/blob';
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '10mb',
+    },
+  },
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -10,7 +18,7 @@ export default async function handler(req, res) {
   if (!secret) return res.status(500).json({ error: 'Server upload secret is not configured' });
 
   const supplied = req.headers['x-upload-secret'];
-  if (supplied !== secret) return res.status(401).json({ error: 'Unauthorized' });
+  if (!supplied || supplied !== secret) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
     const { imageBase64, fileName, contentType } = req.body || {};
