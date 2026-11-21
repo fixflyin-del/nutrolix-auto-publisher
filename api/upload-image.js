@@ -8,6 +8,10 @@ export const config = {
   },
 };
 
+const allowedSourceHosts = new Set([
+  '94vq1ehpyh8ppou9.public.blob.vercel-storage.com',
+]);
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -21,20 +25,45 @@ export default async function handler(req, res) {
   if (!supplied || supplied !== secret) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const { imageBase64, fileName, contentType } = req.body || {};
-    if (!imageBase64 || typeof imageBase64 !== 'string') {
-      return res.status(400).json({ error: 'imageBase64 is required' });
+    const { imageBase64, sourceUrl, fileName, contentType } = req.body || {};
+    let buffer;
+    let mime;
+
+    if (sourceUrl) {
+      let parsed;
+      try {
+        parsed = new URL(sourceUrl);
+      } catch {
+        return res.status(400).json({ error: 'sourceUrl must be a valid URL' });
+      }
+      if (parsed.protocol !== 'https:' || !allowedSourceHosts.has(parsed.hostname)) {
+        return res.status(400).json({ error: 'sourceUrl host is not allowed' });
+      }
+
+      const upstream = await fetch(parsed.toString(), { signal: AbortSignal.timeout(15000) });
+      if (!upstream.ok) return res.status(400).json({ error: 'Could not fetch source image' });
+      mime = upstream.headers.get('content-type')?.split(';')[0] || '';
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
+        return res.status(400).json({ error: 'Source must be PNG, JPEG, or WebP' });
+      }
+      const declaredSize = Number(upstream.headers.get('content-length') || 0);
+      if (declaredSize > 8 * 1024 * 1024) {
+        return res.status(400).json({ error: 'Image must be 8 MB or smaller' });
+      }
+      buffer = Buffer.from(await upstream.arrayBuffer());
+    } else if (imageBase64 && typeof imageBase64 === 'string') {
+      const match = imageBase64.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);
+      const raw = match ? match[2] : imageBase64;
+      mime = match ? match[1] : (contentType || 'image/png');
+      if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
+        return res.status(400).json({ error: 'Only PNG, JPEG, or WebP images are accepted' });
+      }
+      buffer = Buffer.from(raw, 'base64');
+    } else {
+      return res.status(400).json({ error: 'imageBase64 or sourceUrl is required' });
     }
 
-    const match = imageBase64.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);
-    const raw = match ? match[2] : imageBase64;
-    const mime = match ? match[1] : (contentType || 'image/png');
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(mime)) {
-      return res.status(400).json({ error: 'Only PNG, JPEG, or WebP images are accepted' });
-    }
-
-    const buffer = Buffer.from(raw, 'base64');
-    if (!buffer.length || buffer.length > 8 * 1024 * 1024) {
+    if (!buffer?.length || buffer.length > 8 * 1024 * 1024) {
       return res.status(400).json({ error: 'Image must be between 1 byte and 8 MB' });
     }
 
